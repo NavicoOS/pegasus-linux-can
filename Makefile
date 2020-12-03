@@ -4,6 +4,6 @@ default:
 	$(MAKE) -C $(KDIR) M=$$PWD
 
 test:
-	rmmod pegasus_usb || :
+	rmmod -f pegasus_usb || :
 	insmod pegasus_usb.ko
 

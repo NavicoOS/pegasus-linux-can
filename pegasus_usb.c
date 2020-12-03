@@ -21,10 +21,12 @@
 /* Define these values to match your devices */
 #define USB_PEGASUS_VENDOR_ID      0x1cda
 #define USB_PEGASUS_PRODUCT_ID     0x03e8
+/* 3rd interface is for CAN */
+#define USB_PEGASUS_CAN_IFNUM      2
 
 /* table of devices that work with this driver */
 static const struct usb_device_id pegasus_table[] = {
-	{ USB_DEVICE(USB_PEGASUS_VENDOR_ID, USB_PEGASUS_PRODUCT_ID) },
+        { USB_DEVICE_INTERFACE_NUMBER(USB_PEGASUS_VENDOR_ID, USB_PEGASUS_PRODUCT_ID, USB_PEGASUS_CAN_IFNUM) },
 	{ }					/* Terminating entry */
 };
 MODULE_DEVICE_TABLE(usb, pegasus_table);
@@ -40,8 +42,46 @@ MODULE_DEVICE_TABLE(usb, pegasus_table);
  * allocations > PAGE_SIZE and the number of packets in a page
  * is an integer 512 is the largest possible packet on EHCI
  */
-#define WRITES_IN_FLIGHT	8
-/* arbitrarily chosen */
+#define WRITES_IN_FLIGHT	1
+
+/* From PegasusPcSw/PegasusIntf/PegasusReqCodec.h */
+/* tReqType enums related to CAN, there are plenty more! */
+#define PRT_GET_DESCRIPTOR 1
+#define PRT_CANOPEN 9
+#define PRT_CANCLOSE 10
+#define PRT_CANBUSON 11
+#define PRT_CANBUSOFF 12
+#define PRT_CANREAD 13
+#define PRT_CANWRITE 14
+#define PRT_GET_CANERRORCTRS 22
+
+
+/* From Firwmware/Source/CAN/HAL/kvcanhw.h */
+/* status is simply the return code of the KVaser API */
+#define kvCAN_OK 0                   /* successful routine call */
+#define kvCAN_ERR_PARAM -1           /* Error in parameter */
+#define kvCAN_ERR_NOMSG -2           /* No messages available */
+#define kvCAN_ERR_NOTFOUND -3        /* Specified hw not found */
+#define kvCAN_ERR_NOMEM -4           /* Out of memory */
+#define kvCAN_ERR_NOCHANNELS -5      /* No channels available */
+#define kvCAN_ERR_RESERVED_6 -6
+#define kvCAN_ERR_TIMEOUT -7         /* Timeout ocurred */
+#define kvCAN_ERR_NOTINITIALIZED -8  /* Library not initialized */
+#define kvCAN_ERR_NOHANDLES -9       /* Can't get handle */
+#define kvCAN_ERR_INVHANDLE -10      /* Handle is invalid */
+#define kvCAN_ERR_RESERVED_11 -11
+#define kvCAN_ERR_DRIVER -12         /* CAN driver type not supported */
+#define kvCAN_ERR_TXBUFOFL -13       /* Transmit buffer overflow */
+#define kvCAN_ERR_RESERVED_14 -14
+#define kvCAN_ERR_HARDWARE -15       /* Generic hardware error */
+
+
+/* From Firwmware/Source/CAN/HAL/kvcanhw.h */
+/* Message flags */
+#define kvCAN_MSG_RTR 0x01          /* Msg is a remote request */
+#define kvCAN_MSG_STD 0x02          /* Msg has a standard (11-bit) id */
+#define kvCAN_MSG_EXT 0x04          /* Msg has an extended (29-bit) id */
+#define kvCAN_MSG_ERROR_FRAME 0x20  /* Msg represents an error frame */
 
 /* Structure to hold all of our device specific stuff */
 struct usb_pegasus {
@@ -164,6 +204,8 @@ static void pegasus_read_bulk_callback(struct urb *urb)
 
 	dev = urb->context;
 
+	dev_info(&dev->interface->dev, "READ CB");
+
 	spin_lock_irqsave(&dev->err_lock, flags);
 	/* sync/async unlink faults aren't errors */
 	if (urb->status) {
@@ -171,7 +213,7 @@ static void pegasus_read_bulk_callback(struct urb *urb)
 		    urb->status == -ECONNRESET ||
 		    urb->status == -ESHUTDOWN))
 			dev_err(&dev->interface->dev,
-				"%s - nonzero write bulk status received: %d\n",
+				"%s - nonzero read bulk status received: %d\n",
 				__func__, urb->status);
 
 		dev->errors = urb->status;
@@ -188,6 +230,9 @@ static int pegasus_do_read_io(struct usb_pegasus *dev, size_t count)
 {
 	int rv;
 
+	dev_info(&dev->interface->dev,
+		 "%s count=%ld\n",
+		 __func__, count);
 	/* prepare a read */
 	usb_fill_bulk_urb(dev->bulk_in_urb,
 			dev->udev,
@@ -230,6 +275,9 @@ static ssize_t pegasus_read(struct file *file, char *buffer, size_t count,
 
 	dev = file->private_data;
 
+	dev_info(&dev->interface->dev,
+		 "READ count=%ld", count);
+	
 	if (!count)
 		return 0;
 
@@ -326,6 +374,7 @@ retry:
 	}
 exit:
 	mutex_unlock(&dev->io_mutex);
+	dev_info(&dev->interface->dev, "READ rv=%d", rv);
 	return rv;
 }
 
@@ -335,6 +384,8 @@ static void pegasus_write_bulk_callback(struct urb *urb)
 	unsigned long flags;
 
 	dev = urb->context;
+
+	dev_info(&dev->interface->dev, "WRITE CB");
 
 	/* sync/async unlink faults aren't errors */
 	if (urb->status) {
@@ -366,6 +417,8 @@ static ssize_t pegasus_write(struct file *file, const char *user_buffer,
 	size_t writesize = min(count, (size_t)MAX_TRANSFER);
 
 	dev = file->private_data;
+
+	dev_info(&dev->interface->dev, "WRITE count=%ld", count);
 
 	/* verify that we actually have some data to write */
 	if (count == 0)
@@ -449,7 +502,7 @@ static ssize_t pegasus_write(struct file *file, const char *user_buffer,
 	 */
 	usb_free_urb(urb);
 
-
+	dev_info(&dev->interface->dev, "WRITE rv=%d", retval);
 	return writesize;
 
 error_unanchor:
@@ -462,6 +515,7 @@ error:
 	up(&dev->limit_sem);
 
 exit:
+	dev_info(&dev->interface->dev, "WRITE ERROR %d", retval);
 	return retval;
 }
 
@@ -507,6 +561,13 @@ static int pegasus_probe(struct usb_interface *interface,
 	dev->udev = usb_get_dev(interface_to_usbdev(interface));
 	dev->interface = usb_get_intf(interface);
 
+	/* Iface 2, config 0 */
+	/* retval = usb_set_interface(dev->udev, 2, 0); */
+	/* if (retval) { */
+	/*   dev_err(&interface->dev, */
+	/* 	  "Could not set interface/conf\n"); */
+	/* } */
+
 	/* set up the endpoint information */
 	/* use only the first bulk-in and bulk-out endpoints */
 	retval = usb_find_common_endpoints(interface->cur_altsetting,
@@ -547,7 +608,7 @@ static int pegasus_probe(struct usb_interface *interface,
 
 	/* let the user know what node this device is now attached to */
 	dev_info(&interface->dev,
-		 "USB Pegasus device now attached to USBPegausus-%d",
+		 "USB Pegasus device now attached to pegasus%d",
 		 interface->minor);
 	return 0;
 
