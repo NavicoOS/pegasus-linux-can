@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * USB Skeleton driver - 2.2
+ * USB Pegasus driver - 1.0
  *
  * Copyright (C) 2001-2004 Greg Kroah-Hartman (greg@kroah.com)
  *
@@ -19,19 +19,19 @@
 
 
 /* Define these values to match your devices */
-#define USB_SKEL_VENDOR_ID	0xfff0
-#define USB_SKEL_PRODUCT_ID	0xfff0
+#define USB_PEGASUS_VENDOR_ID      0x1cda
+#define USB_PEGASUS_PRODUCT_ID     0x03e8
 
 /* table of devices that work with this driver */
-static const struct usb_device_id skel_table[] = {
-	{ USB_DEVICE(USB_SKEL_VENDOR_ID, USB_SKEL_PRODUCT_ID) },
+static const struct usb_device_id pegasus_table[] = {
+	{ USB_DEVICE(USB_PEGASUS_VENDOR_ID, USB_PEGASUS_PRODUCT_ID) },
 	{ }					/* Terminating entry */
 };
-MODULE_DEVICE_TABLE(usb, skel_table);
+MODULE_DEVICE_TABLE(usb, pegasus_table);
 
 
 /* Get a minor range for your devices from the usb maintainer */
-#define USB_SKEL_MINOR_BASE	192
+#define USB_PEGASUS_MINOR_BASE	192
 
 /* our private defines. if this grows any larger, use your own .h file */
 #define MAX_TRANSFER		(PAGE_SIZE - 512)
@@ -44,7 +44,7 @@ MODULE_DEVICE_TABLE(usb, skel_table);
 /* arbitrarily chosen */
 
 /* Structure to hold all of our device specific stuff */
-struct usb_skel {
+struct usb_pegasus {
 	struct usb_device	*udev;			/* the usb device for this device */
 	struct usb_interface	*interface;		/* the interface for this device */
 	struct semaphore	limit_sem;		/* limiting the number of writes in progress */
@@ -64,14 +64,14 @@ struct usb_skel {
 	unsigned long		disconnected:1;
 	wait_queue_head_t	bulk_in_wait;		/* to wait for an ongoing read */
 };
-#define to_skel_dev(d) container_of(d, struct usb_skel, kref)
+#define to_pegasus_dev(d) container_of(d, struct usb_pegasus, kref)
 
-static struct usb_driver skel_driver;
-static void skel_draw_down(struct usb_skel *dev);
+static struct usb_driver pegasus_driver;
+static void pegasus_draw_down(struct usb_pegasus *dev);
 
-static void skel_delete(struct kref *kref)
+static void pegasus_delete(struct kref *kref)
 {
-	struct usb_skel *dev = to_skel_dev(kref);
+	struct usb_pegasus *dev = to_pegasus_dev(kref);
 
 	usb_free_urb(dev->bulk_in_urb);
 	usb_put_intf(dev->interface);
@@ -80,16 +80,16 @@ static void skel_delete(struct kref *kref)
 	kfree(dev);
 }
 
-static int skel_open(struct inode *inode, struct file *file)
+static int pegasus_open(struct inode *inode, struct file *file)
 {
-	struct usb_skel *dev;
+	struct usb_pegasus *dev;
 	struct usb_interface *interface;
 	int subminor;
 	int retval = 0;
 
 	subminor = iminor(inode);
 
-	interface = usb_find_interface(&skel_driver, subminor);
+	interface = usb_find_interface(&pegasus_driver, subminor);
 	if (!interface) {
 		pr_err("%s - error, can't find device for minor %d\n",
 			__func__, subminor);
@@ -117,9 +117,9 @@ exit:
 	return retval;
 }
 
-static int skel_release(struct inode *inode, struct file *file)
+static int pegasus_release(struct inode *inode, struct file *file)
 {
-	struct usb_skel *dev;
+	struct usb_pegasus *dev;
 
 	dev = file->private_data;
 	if (dev == NULL)
@@ -129,13 +129,13 @@ static int skel_release(struct inode *inode, struct file *file)
 	usb_autopm_put_interface(dev->interface);
 
 	/* decrement the count on our device */
-	kref_put(&dev->kref, skel_delete);
+	kref_put(&dev->kref, pegasus_delete);
 	return 0;
 }
 
-static int skel_flush(struct file *file, fl_owner_t id)
+static int pegasus_flush(struct file *file, fl_owner_t id)
 {
-	struct usb_skel *dev;
+	struct usb_pegasus *dev;
 	int res;
 
 	dev = file->private_data;
@@ -144,7 +144,7 @@ static int skel_flush(struct file *file, fl_owner_t id)
 
 	/* wait for io to stop */
 	mutex_lock(&dev->io_mutex);
-	skel_draw_down(dev);
+	pegasus_draw_down(dev);
 
 	/* read out errors, leave subsequent opens a clean slate */
 	spin_lock_irq(&dev->err_lock);
@@ -157,9 +157,9 @@ static int skel_flush(struct file *file, fl_owner_t id)
 	return res;
 }
 
-static void skel_read_bulk_callback(struct urb *urb)
+static void pegasus_read_bulk_callback(struct urb *urb)
 {
-	struct usb_skel *dev;
+	struct usb_pegasus *dev;
 	unsigned long flags;
 
 	dev = urb->context;
@@ -184,7 +184,7 @@ static void skel_read_bulk_callback(struct urb *urb)
 	wake_up_interruptible(&dev->bulk_in_wait);
 }
 
-static int skel_do_read_io(struct usb_skel *dev, size_t count)
+static int pegasus_do_read_io(struct usb_pegasus *dev, size_t count)
 {
 	int rv;
 
@@ -195,7 +195,7 @@ static int skel_do_read_io(struct usb_skel *dev, size_t count)
 				dev->bulk_in_endpointAddr),
 			dev->bulk_in_buffer,
 			min(dev->bulk_in_size, count),
-			skel_read_bulk_callback,
+			pegasus_read_bulk_callback,
 			dev);
 	/* tell everybody to leave the URB alone */
 	spin_lock_irq(&dev->err_lock);
@@ -221,10 +221,10 @@ static int skel_do_read_io(struct usb_skel *dev, size_t count)
 	return rv;
 }
 
-static ssize_t skel_read(struct file *file, char *buffer, size_t count,
+static ssize_t pegasus_read(struct file *file, char *buffer, size_t count,
 			 loff_t *ppos)
 {
-	struct usb_skel *dev;
+	struct usb_pegasus *dev;
 	int rv;
 	bool ongoing_io;
 
@@ -290,7 +290,7 @@ retry:
 			 * all data has been used
 			 * actual IO needs to be done
 			 */
-			rv = skel_do_read_io(dev, count);
+			rv = pegasus_do_read_io(dev, count);
 			if (rv < 0)
 				goto exit;
 			else
@@ -315,10 +315,10 @@ retry:
 		 * we start IO but don't wait
 		 */
 		if (available < count)
-			skel_do_read_io(dev, count - chunk);
+			pegasus_do_read_io(dev, count - chunk);
 	} else {
 		/* no data in the buffer */
-		rv = skel_do_read_io(dev, count);
+		rv = pegasus_do_read_io(dev, count);
 		if (rv < 0)
 			goto exit;
 		else
@@ -329,9 +329,9 @@ exit:
 	return rv;
 }
 
-static void skel_write_bulk_callback(struct urb *urb)
+static void pegasus_write_bulk_callback(struct urb *urb)
 {
-	struct usb_skel *dev;
+	struct usb_pegasus *dev;
 	unsigned long flags;
 
 	dev = urb->context;
@@ -356,10 +356,10 @@ static void skel_write_bulk_callback(struct urb *urb)
 	up(&dev->limit_sem);
 }
 
-static ssize_t skel_write(struct file *file, const char *user_buffer,
+static ssize_t pegasus_write(struct file *file, const char *user_buffer,
 			  size_t count, loff_t *ppos)
 {
-	struct usb_skel *dev;
+	struct usb_pegasus *dev;
 	int retval = 0;
 	struct urb *urb = NULL;
 	char *buf = NULL;
@@ -429,7 +429,7 @@ static ssize_t skel_write(struct file *file, const char *user_buffer,
 	/* initialize the urb properly */
 	usb_fill_bulk_urb(urb, dev->udev,
 			  usb_sndbulkpipe(dev->udev, dev->bulk_out_endpointAddr),
-			  buf, writesize, skel_write_bulk_callback, dev);
+			  buf, writesize, pegasus_write_bulk_callback, dev);
 	urb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
 	usb_anchor_urb(urb, &dev->submitted);
 
@@ -465,13 +465,13 @@ exit:
 	return retval;
 }
 
-static const struct file_operations skel_fops = {
+static const struct file_operations pegasus_fops = {
 	.owner =	THIS_MODULE,
-	.read =		skel_read,
-	.write =	skel_write,
-	.open =		skel_open,
-	.release =	skel_release,
-	.flush =	skel_flush,
+	.read =		pegasus_read,
+	.write =	pegasus_write,
+	.open =		pegasus_open,
+	.release =	pegasus_release,
+	.flush =	pegasus_flush,
 	.llseek =	noop_llseek,
 };
 
@@ -479,16 +479,16 @@ static const struct file_operations skel_fops = {
  * usb class driver info in order to get a minor number from the usb core,
  * and to have the device registered with the driver core
  */
-static struct usb_class_driver skel_class = {
-	.name =		"skel%d",
-	.fops =		&skel_fops,
-	.minor_base =	USB_SKEL_MINOR_BASE,
+static struct usb_class_driver pegasus_class = {
+	.name =		"pegasus%d",
+	.fops =		&pegasus_fops,
+	.minor_base =	USB_PEGASUS_MINOR_BASE,
 };
 
-static int skel_probe(struct usb_interface *interface,
+static int pegasus_probe(struct usb_interface *interface,
 		      const struct usb_device_id *id)
 {
-	struct usb_skel *dev;
+	struct usb_pegasus *dev;
 	struct usb_endpoint_descriptor *bulk_in, *bulk_out;
 	int retval;
 
@@ -536,7 +536,7 @@ static int skel_probe(struct usb_interface *interface,
 	usb_set_intfdata(interface, dev);
 
 	/* we can register the device now, as it is ready */
-	retval = usb_register_dev(interface, &skel_class);
+	retval = usb_register_dev(interface, &pegasus_class);
 	if (retval) {
 		/* something prevented us from registering this driver */
 		dev_err(&interface->dev,
@@ -547,27 +547,27 @@ static int skel_probe(struct usb_interface *interface,
 
 	/* let the user know what node this device is now attached to */
 	dev_info(&interface->dev,
-		 "USB Skeleton device now attached to USBSkel-%d",
+		 "USB Pegasus device now attached to USBPegausus-%d",
 		 interface->minor);
 	return 0;
 
 error:
 	/* this frees allocated memory */
-	kref_put(&dev->kref, skel_delete);
+	kref_put(&dev->kref, pegasus_delete);
 
 	return retval;
 }
 
-static void skel_disconnect(struct usb_interface *interface)
+static void pegasus_disconnect(struct usb_interface *interface)
 {
-	struct usb_skel *dev;
+	struct usb_pegasus *dev;
 	int minor = interface->minor;
 
 	dev = usb_get_intfdata(interface);
 	usb_set_intfdata(interface, NULL);
 
 	/* give back our minor */
-	usb_deregister_dev(interface, &skel_class);
+	usb_deregister_dev(interface, &pegasus_class);
 
 	/* prevent more I/O from starting */
 	mutex_lock(&dev->io_mutex);
@@ -578,12 +578,12 @@ static void skel_disconnect(struct usb_interface *interface)
 	usb_kill_anchored_urbs(&dev->submitted);
 
 	/* decrement our usage count */
-	kref_put(&dev->kref, skel_delete);
+	kref_put(&dev->kref, pegasus_delete);
 
-	dev_info(&interface->dev, "USB Skeleton #%d now disconnected", minor);
+	dev_info(&interface->dev, "USB Pegasus #%d now disconnected", minor);
 }
 
-static void skel_draw_down(struct usb_skel *dev)
+static void pegasus_draw_down(struct usb_pegasus *dev)
 {
 	int time;
 
@@ -593,34 +593,34 @@ static void skel_draw_down(struct usb_skel *dev)
 	usb_kill_urb(dev->bulk_in_urb);
 }
 
-static int skel_suspend(struct usb_interface *intf, pm_message_t message)
+static int pegasus_suspend(struct usb_interface *intf, pm_message_t message)
 {
-	struct usb_skel *dev = usb_get_intfdata(intf);
+	struct usb_pegasus *dev = usb_get_intfdata(intf);
 
 	if (!dev)
 		return 0;
-	skel_draw_down(dev);
+	pegasus_draw_down(dev);
 	return 0;
 }
 
-static int skel_resume(struct usb_interface *intf)
+static int pegasus_resume(struct usb_interface *intf)
 {
 	return 0;
 }
 
-static int skel_pre_reset(struct usb_interface *intf)
+static int pegasus_pre_reset(struct usb_interface *intf)
 {
-	struct usb_skel *dev = usb_get_intfdata(intf);
+	struct usb_pegasus *dev = usb_get_intfdata(intf);
 
 	mutex_lock(&dev->io_mutex);
-	skel_draw_down(dev);
+	pegasus_draw_down(dev);
 
 	return 0;
 }
 
-static int skel_post_reset(struct usb_interface *intf)
+static int pegasus_post_reset(struct usb_interface *intf)
 {
-	struct usb_skel *dev = usb_get_intfdata(intf);
+	struct usb_pegasus *dev = usb_get_intfdata(intf);
 
 	/* we are sure no URBs are active - no locking needed */
 	dev->errors = -EPIPE;
@@ -629,18 +629,18 @@ static int skel_post_reset(struct usb_interface *intf)
 	return 0;
 }
 
-static struct usb_driver skel_driver = {
-	.name =		"skeleton",
-	.probe =	skel_probe,
-	.disconnect =	skel_disconnect,
-	.suspend =	skel_suspend,
-	.resume =	skel_resume,
-	.pre_reset =	skel_pre_reset,
-	.post_reset =	skel_post_reset,
-	.id_table =	skel_table,
+static struct usb_driver pegasus_driver = {
+	.name =		"pegasus_usb",
+	.probe =	pegasus_probe,
+	.disconnect =	pegasus_disconnect,
+	.suspend =	pegasus_suspend,
+	.resume =	pegasus_resume,
+	.pre_reset =	pegasus_pre_reset,
+	.post_reset =	pegasus_post_reset,
+	.id_table =	pegasus_table,
 	.supports_autosuspend = 1,
 };
 
-module_usb_driver(skel_driver);
+module_usb_driver(pegasus_driver);
 
 MODULE_LICENSE("GPL v2");
