@@ -1,0 +1,13 @@
+*~
+.cache.mk
+.pegasus_usb.ko.cmd
+.pegasus_usb.mod.o.cmd
+.pegasus_usb.o.cmd
+.tmp_versions/
+Module.symvers
+modules.order
+pegasus_usb.ko
+pegasus_usb.mod.c
+pegasus_usb.mod.o
+pegasus_usb.o
+pegasus_usb.o.ur-safe
