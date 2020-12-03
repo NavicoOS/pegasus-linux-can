@@ -83,6 +83,116 @@ MODULE_DEVICE_TABLE(usb, pegasus_table);
 #define kvCAN_MSG_EXT 0x04          /* Msg has an extended (29-bit) id */
 #define kvCAN_MSG_ERROR_FRAME 0x20  /* Msg represents an error frame */
 
+struct msg_hdr {
+  u8 len;
+  u8 cmd;
+  u16 id;
+};
+
+/* Type 1 */
+struct desc_req {
+};
+struct desc_ans {
+  u8 minor;
+  u8 major;
+  u16 pf_id;
+  u16 bd_id;
+  u32 ser_num;
+};
+
+/* Type 9 */
+struct open_req {
+  u8 channel;
+  u8 flags;
+};
+struct open_ans {
+  u8 handle;
+  u16 status;
+};
+
+/* Type 10 */
+struct close_req {
+  u8 handle;
+};
+struct close_ans {
+  u16 status;
+};
+
+/* Type 11 */
+struct bus_on_req {
+  u8 handle;
+};
+struct bus_on_ans {
+  u16 status;
+};
+
+/* Type 12 */
+struct bus_off_req {
+  u8 handle;
+};
+struct bus_off_ans {
+  u16 status;
+};
+
+/* Type 13 */
+struct read_req {
+  u8 handle;
+};
+struct read_ans {
+  u16 status;
+  u8 flags;
+  u32 id;
+  u8 len;
+  u8 data[8];
+  u16 ts;
+};
+
+/* Type 14 */
+struct write_req {
+  u8 handle;
+  u8 flags;
+  u32 id;
+  u8 len;
+  u8 data[8];
+};
+struct write_ans {
+  u16 status;
+};
+
+/* Type 22 */
+struct stats_req {
+  u8 handle;
+};
+struct stats_ans {
+  u32 tx;
+  u32 rx;
+  u32 err;
+  u16 status;
+};
+
+/* Main message type */
+struct __attribute__ ((packed)) pegasus_msg {
+        struct msg_hdr hdr;
+	union {
+	  struct desc_req _desc_req;
+	  struct desc_ans _desc_ans;
+	  struct open_req _open_req;
+	  struct open_ans _open_ans;
+	  struct close_req _close_req;
+	  struct close_ans _close_ans;
+	  struct bus_on_req _bus_on_req;
+	  struct bus_on_ans _bis_on_ans;
+	  struct bus_off_req _bus_off_req;
+	  struct bus_off_ans _bus_off_ans;
+	  struct read_req _read_req;
+	  struct read_ans _read_ans;
+	  struct write_req _write_req;
+	  struct write_ans _write_ans;
+	  struct stats_req _stat_req;
+	  struct stats_ans _stat_ans;
+	} body;
+};
+
 /* Structure to hold all of our device specific stuff */
 struct usb_pegasus {
 	struct usb_device	*udev;			/* the usb device for this device */
@@ -539,6 +649,29 @@ static struct usb_class_driver pegasus_class = {
 	.minor_base =	USB_PEGASUS_MINOR_BASE,
 };
 
+static int pegasus_usb_send_msg(struct usb_pegasus *dev, struct pegasus_msg *msg)
+{
+	int actual_length;
+
+	return usb_bulk_msg(dev->udev,
+			    usb_sndbulkpipe(dev->udev, dev->bulk_out_endpointAddr),
+			    msg,
+			    msg->hdr.len,
+			    &actual_length,
+			    1000);
+}
+
+static int pegasus_usb_wait_msg(struct usb_pegasus *dev, struct pegasus_msg *msg)
+{
+	int actual_length;
+
+	return usb_bulk_msg(dev->udev,
+			    usb_rcvbulkpipe(dev->udev, dev->bulk_in_endpointAddr),
+			    msg,
+			    msg->hdr.len,
+			    &actual_length,
+			    1000);
+}
 static int pegasus_probe(struct usb_interface *interface,
 		      const struct usb_device_id *id)
 {
@@ -606,10 +739,42 @@ static int pegasus_probe(struct usb_interface *interface,
 		goto error;
 	}
 
+	struct pegasus_msg *msg;
+	msg = kmalloc(sizeof(*msg), GFP_KERNEL);
+	if (!msg) {
+	  retval = -ENOMEM;
+	  kfree(msg);
+	  goto error;
+	}
+	msg->hdr.len = 4;
+	msg->hdr.cmd = PRT_GET_DESCRIPTOR;
+	msg->hdr.id = 0;
+	retval = pegasus_usb_send_msg(dev, msg);
+	if (retval < 0) {
+	  dev_err(&interface->dev, "sending desc req failed: %d\n", retval);
+	  kfree(msg);
+	  goto error;
+	}
+	
+	msg->hdr.len = 14;
+	retval = pegasus_usb_wait_msg(dev, msg);
+	if (retval < 0) {
+	  dev_err(&interface->dev, "wait desc ans failed: %d\n", retval);
+	  kfree(msg);
+	  goto error;
+	}
+	
 	/* let the user know what node this device is now attached to */
 	dev_info(&interface->dev,
-		 "USB Pegasus device now attached to pegasus%d",
+		 "USB Pegasus CAN device now attached to pegasus%d",
 		 interface->minor);
+	dev_info(&interface->dev,
+		 "pegasus%d: version=%d.%d, platform=0x%04X, board=0x%04X, sernum=%04X",
+		 interface->minor, msg->body._desc_ans.major,
+		 msg->body._desc_ans.minor,
+		 __le16_to_cpu(msg->body._desc_ans.pf_id),
+		 __le16_to_cpu(msg->body._desc_ans.bd_id),
+		 __le32_to_cpu(msg->body._desc_ans.ser_num));
 	return 0;
 
 error:
