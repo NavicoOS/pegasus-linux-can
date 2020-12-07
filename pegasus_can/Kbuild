@@ -1,0 +1,2 @@
+obj-m  := pegasus_can.o
+
