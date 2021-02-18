@@ -19,7 +19,7 @@ $ echo -ne '\x04\x01\x00\x05' | sudo dd of=/dev/pegasus0 && sudo dd if=/dev/pega
 00000000  0e 01 00 05 0d 00 ec 03  00 00 ff ff ff ff        |..............|
 0000000e
 # 0d 00 means v0.13, ec03 is platfrom ID, 00 00 is Board Id, and ffffffff is serial number
-# This can be query with https://bitbucket.navico.com/users/christian.gagneraud/repos/pegasus-linux-poc
+# This can be query with https://github.com/NavicoOS/pegasus-python-can
 $ sudo ./venv/bin/python3 ../pegasus.py  
 Firmware version: v0.13
 Serial number:    0xFFFFFFFF
