@@ -4,7 +4,7 @@ The goal is to have a kernel driver for the CAN stack.
 This is currently a WIP.
 It currently grab the custom USB interface, and allow to read/write over bulk USB transfer from a char device.
 
-Here is how to probe for Pegasus custom "get descriptor" commad:
+Here is how to probe for Pegasus custom "get descriptor" command:
 ```
 # Build and load module
 $ make && sudo make test
